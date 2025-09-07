@@ -92,7 +92,6 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getFirestore, doc, getDoc, setDoc, onSnapshot, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  // Optional: import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics.js";
 
   // Your Firebase config (from console)
   const firebaseConfig = {
@@ -112,6 +111,9 @@
   const url = new URL(window.location.href);
   const SESSION = (url.searchParams.get('s') || 'demo').toLowerCase();
   const sessionRef = doc(db, 'sessions', SESSION);
+
+  // 👇 make activeSide device-local only
+  const SIDE_STORAGE_KEY = 'active_side_' + SESSION;
 
   const ITEMS = [
     {key:'hamburger',       label:'Hamburger',      icon:'🍔'},
@@ -145,6 +147,11 @@
     return s;
   }
   let state = loadLocal() || createDefaultState();
+
+  // pick side: URL param 'side' or saved value or 'home'
+  const initialSide = url.searchParams.get('side') || localStorage.getItem(SIDE_STORAGE_KEY) || 'home';
+  state.activeSide = (initialSide === 'visitor') ? 'visitor' : 'home';
+
   upgradeState(state);
 
   function cycleStatus(current){ return current==='green' ? 'yellow' : current==='yellow' ? 'red' : 'green'; }
@@ -155,13 +162,14 @@
     if(e.target.matches('.tab')){
       const side = e.target.dataset.side;
       state.activeSide = side;
+      localStorage.setItem(SIDE_STORAGE_KEY, side); // device-local only
       [...sideTabs.querySelectorAll('.tab')].forEach(t=>{
         t.classList.toggle('active', t.dataset.side===side);
         t.setAttribute('aria-selected', t.dataset.side===side ? 'true' : 'false');
       });
       showTiles();
-      queueRemoteSave();
-      saveLocal(state);
+      saveLocal(state);        // keep local state fresh
+      // no remote save for activeSide
     }
   });
 
@@ -199,7 +207,7 @@
   function queueRemoteSave(){
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async ()=>{
-      const payload = { activeSide: state.activeSide, sides: state.sides, _updatedAt: Date.now(), _by: clientId };
+      const payload = { sides: state.sides, _updatedAt: Date.now(), _by: clientId }; // only statuses
       await setDoc(sessionRef, payload, { merge: true });
     }, 120);
   }
@@ -209,12 +217,16 @@
     if(snap.exists()){
       const cloud = snap.data();
       if(cloud?.sides) state.sides = cloud.sides;
-      if(cloud?.activeSide) state.activeSide = cloud.activeSide;
       upgradeState(state);
       saveLocal(state);
     } else {
-      await setDoc(sessionRef, { activeSide: state.activeSide, sides: state.sides, _createdAt: Date.now(), _by: clientId });
+      await setDoc(sessionRef, { sides: state.sides, _createdAt: Date.now(), _by: clientId });
     }
+    // reflect local side tab state
+    [...sideTabs.querySelectorAll('.tab')].forEach(t=>{
+      t.classList.toggle('active', t.dataset.side===state.activeSide);
+      t.setAttribute('aria-selected', t.dataset.side===state.activeSide ? 'true' : 'false');
+    });
     showTiles();
   })();
 
@@ -223,9 +235,9 @@
     const cloud = snap.data();
     if(cloud._by === clientId) return;
     if(cloud?.sides){ state.sides = cloud.sides; }
-    if(cloud?.activeSide){ state.activeSide = cloud.activeSide; }
     upgradeState(state);
     saveLocal(state);
+    // keep local side selection
     [...sideTabs.querySelectorAll('.tab')].forEach(t=>{
       t.classList.toggle('active', t.dataset.side===state.activeSide);
       t.setAttribute('aria-selected', t.dataset.side===state.activeSide ? 'true' : 'false');
